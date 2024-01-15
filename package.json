@@ -1,6 +1,6 @@
 {
 	"name": "highlights-to-property",
-	"version": "0.1.0",
+	"version": "0.1.1",
 	"description": "Create a property from the markdown and html highlights of a note.",
 	"main": "main.js",
 	"scripts": {
