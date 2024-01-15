@@ -1,7 +1,6 @@
-import {Plugin, Notice, addIcon, MarkdownView, TAbstractFile, TextFileView} from "obsidian"
+import {Plugin, Notice, addIcon, TextFileView} from "obsidian"
 import ExtractHighlightsPluginSettings from "./ExtractHighlightsPluginSettings"
 import ExtractHighlightsPluginSettingsTab from "./ExtractHighlightsPluginSettingsTab"
-import { get } from "http";
 
 addIcon(
   'highlight_marker',
@@ -65,18 +64,17 @@ export default class ExtractHighlightsPlugin extends Plugin {
 	async saveHighlightsToProperty() {
 		const activeView: TextFileView | null =
 			this.app.workspace.getActiveViewOfType(TextFileView);
-		if (activeView == null) {
+		if (activeView == null || activeView.file == null) {
 			return;
 		}
 		const processResults = this.processHighlights(activeView);
-		const highlightsText = processResults.markdown;
-		const contexts = processResults.contexts;
+		const highlightsText = processResults.highlights;
 
 		try {
 			await this.app.fileManager.processFrontMatter(
 				activeView.file,
 				(frontmatter) => {
-					let existing: boolean = false;
+					let existing = false;
 					if (frontmatter['highlights'] != null) {
 						existing = true;
 					}
@@ -109,79 +107,8 @@ ${e.message}`;
 		};
 	}
 
-	// async extractHighlights() {
-	// 	let activeLeaf: any = this.app.workspace.activeLeaf ?? null;
-
-	// 	let name = activeLeaf?.view.file.basename;
-
-	// 	try {
-	// 		if (activeLeaf?.view?.data) {
-	// 			let processResults = this.processHighlights(activeLeaf.view);
-	// 			let highlightsText = processResults.markdown;
-	// 			let highlights = processResults.highlights;
-	// 			let baseNames = processResults.baseNames;
-	// 			let contexts = processResults.contexts;
-	// 			let saveStatus = this.saveToClipboard(highlightsText);
-	// 			new Notice(saveStatus);
-
-	// 			const newBasenameMOC = "Highlights for " + name + ".md";
-	// 			if (this.settings.createNewFile) {
-	// 				// Add link back to Original
-	// 				highlightsText += `## Source\n- [[${name}]]`;
-
-	// 				await this.saveToFile(newBasenameMOC, highlightsText);
-	// 				await this.app.workspace.openLinkText(
-	// 					newBasenameMOC,
-	// 					newBasenameMOC,
-	// 					true
-	// 				);
-	// 			}
-
-	// 			if (
-	// 				this.settings.createNewFile &&
-	// 				this.settings.createLinks &&
-	// 				this.settings.explodeIntoNotes
-	// 			) {
-	// 				for (var i = 0; i < baseNames.length; i++) {
-	// 					// console.log("Creating file for " + baseNames[i]);
-	// 					var content = "";
-	// 					// add highlight as quote
-	// 					content += "## Source\n";
-	// 					if (this.settings.createContextualQuotes) {
-	// 						// context quote
-	// 						content += `> ${contexts[i]}[^1]`;
-	// 					} else {
-	// 						// regular highlight quote
-	// 						content += `> ${highlights[i]}[^1]`;
-	// 					}
-	// 					content += "\n\n";
-	// 					content += `[^1]: [[${name}]]`;
-	// 					content += "\n";
-	// 					// console.log(content);
-
-	// 					const newBasename = baseNames[i] + ".md";
-
-	// 					await this.saveToFile(newBasename, content);
-
-	// 					if (this.settings.openExplodedNotes) {
-	// 						await this.app.workspace.openLinkText(
-	// 							newBasename,
-	// 							newBasename,
-	// 							true
-	// 						);
-	// 					}
-	// 				}
-	// 			}
-	// 		} else {
-	// 			new Notice("No highlights to extract.");
-	// 		}
-	// 	} catch (e) {
-	// 		console.log(e.message);
-	// 	}
-	// }
-
 	processHighlights(view: TextFileView) {
-		const patterns: string[] = ["==(.*?)=="];
+		const patterns: string[] = ["==(.*?)==", "<mark>(.*?)</mark>"];
 		const custom_patterns: string[] =
 			this.settings.customHighlightRegex.split("\n");
 		custom_patterns.forEach((v) => {
@@ -207,10 +134,8 @@ ${e.message}`;
 		const re = new RegExp(regexStr, "g");
 
 		const markdownText = view.data;
-		// const matches = markdownText.match(re);
 
-		let result = "";
-		const contexts: string[] = [];
+		const highlights: string[] = [];
 		const lines = markdownText.split("\n");
 		const cleanedLines: string[] = [];
 
@@ -235,8 +160,8 @@ ${e.message}`;
 							) {
 								const val = cleanedLines[i];
 
-								if (!contexts.contains(val)) {
-									contexts.push(val);
+								if (!highlights.contains(val)) {
+									highlights.push(val);
 								}
 							}
 						}
@@ -249,15 +174,13 @@ ${e.message}`;
 							trim = this.capitalizeFirstLetter(trim);
 						}
 					}
-
-					result += "- " + trim + "\n";
+					highlights.push(trim);
 					return false;
 				}
 			});
 		}
-		result += "\n";
 
-		return { markdown: result, contexts: contexts };
+		return { highlights:  highlights};
 	}
 
 	saveToClipboard(data: string): string {
