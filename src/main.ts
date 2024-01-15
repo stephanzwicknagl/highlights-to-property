@@ -31,12 +31,6 @@ export default class ExtractHighlightsPlugin extends Plugin {
 			id: "shortcut-extract-highlights",
 			name: "Shortcut adding highlights to a property",
 			callback: () => this.saveHighlightsToProperty(),
-			hotkeys: [
-				{
-					modifiers: ["Alt", "Shift"],
-					key: "±",
-				},
-			],
 		});
 	}
 
