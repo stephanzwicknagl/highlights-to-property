@@ -1,7 +1,7 @@
-import {Plugin, Notice, addIcon, View, MarkdownView, Workspace} from "obsidian"
+import {Plugin, Notice, addIcon, MarkdownView, TAbstractFile, TextFileView} from "obsidian"
 import ExtractHighlightsPluginSettings from "./ExtractHighlightsPluginSettings"
 import ExtractHighlightsPluginSettingsTab from "./ExtractHighlightsPluginSettingsTab"
-import ToggleHighlight from "./ToggleHighlight";
+import { get } from "http";
 
 addIcon(
   'highlight_marker',
@@ -9,43 +9,33 @@ addIcon(
 );
 
 export default class ExtractHighlightsPlugin extends Plugin {
-
 	public settings: ExtractHighlightsPluginSettings;
-	public statusBar: HTMLElement
-	public counter: 0;
-	private editor: CodeMirror.Editor;
+	public statusBar: HTMLElement;
 
 	async onload() {
-		this.counter = 0;
 		this.loadSettings();
-		this.addSettingTab(new ExtractHighlightsPluginSettingsTab(this.app, this));
+		this.addSettingTab(
+			new ExtractHighlightsPluginSettingsTab(this.app, this)
+		);
 
-		this.statusBar = this.addStatusBarItem()
+		this.statusBar = this.addStatusBarItem();
 
-		this.addRibbonIcon('highlight_marker', 'Extract Highlights', () => {
-			this.extractHighlights();
-		});
+		this.addRibbonIcon(
+			"highlight_marker",
+			"Add Highlights to Property",
+			() => {
+				this.saveHighlightsToProperty();
+			}
+		);
 
 		this.addCommand({
 			id: "shortcut-extract-highlights",
-			name: "Shortcut for extracting highlights",
-			callback: () => this.extractHighlights(),
+			name: "Shortcut adding highlights to a property",
+			callback: () => this.saveHighlightsToProperty(),
 			hotkeys: [
 				{
 					modifiers: ["Alt", "Shift"],
 					key: "±",
-				},
-			],
-		});
-
-		this.addCommand({
-			id: "shortcut-highlight-sentence",
-			name: "Shortcut for highlighting sentence cursor is in",
-			callback: () => this.createHighlight(),
-			hotkeys: [
-				{
-					modifiers: ["Alt", "Shift"],
-					key: "—",
 				},
 			],
 		});
@@ -54,198 +44,220 @@ export default class ExtractHighlightsPlugin extends Plugin {
 	loadSettings() {
 		this.settings = new ExtractHighlightsPluginSettings();
 		(async () => {
-		  const loadedSettings = await this.loadData();
-		  if (loadedSettings) {
-			// console.log("Found existing settings file");
-			this.settings.headlineText = loadedSettings.headlineText;
-			this.settings.addFootnotes = loadedSettings.addFootnotes;
-			this.settings.createLinks = loadedSettings.createLinks;
-			this.settings.autoCapitalize = loadedSettings.autoCapitalize;
-			this.settings.createNewFile = loadedSettings.createNewFile;
-			this.settings.explodeIntoNotes = loadedSettings.explodeIntoNotes;
-			this.settings.openExplodedNotes = loadedSettings.openExplodedNotes;
-			this.settings.createContextualQuotes = loadedSettings.createContextualQuotes;
-		  } else {
-			// console.log("No settings file found, saving...");
-			this.saveData(this.settings);
-		  }
+			const loadedSettings = await this.loadData();
+			if (loadedSettings) {
+				// console.log("Found existing settings file");
+				this.settings.useBoldForHighlights =
+					loadedSettings.useBoldForHighlights;
+				this.settings.useHighlightr = loadedSettings.useHighlightr;
+				this.settings.customHighlightRegex =
+					loadedSettings.customHighlightRegex;
+				this.settings.autoCapitalize = loadedSettings.autoCapitalize;
+				this.settings.createContextualQuotes =
+					loadedSettings.createContextualQuotes;
+			} else {
+				// console.log("No settings file found, saving...");
+				this.saveData(this.settings);
+			}
 		})();
 	}
 
-	async extractHighlights() {
-		let activeLeaf: any = this.app.workspace.activeLeaf ?? null
-
-		let name = activeLeaf?.view.file.basename;
+	async saveHighlightsToProperty() {
+		const activeView: TextFileView | null =
+			this.app.workspace.getActiveViewOfType(TextFileView);
+		if (activeView == null) {
+			return;
+		}
+		const processResults = this.processHighlights(activeView);
+		const highlightsText = processResults.markdown;
+		const contexts = processResults.contexts;
 
 		try {
-			if (activeLeaf?.view?.data) {
-				let processResults = this.processHighlights(activeLeaf.view);
-				let highlightsText = processResults.markdown;
-				let highlights = processResults.highlights;
-				let baseNames = processResults.baseNames;
-				let contexts = processResults.contexts;
-				let saveStatus = this.saveToClipboard(highlightsText);
-				new Notice(saveStatus);
-
-				const newBasenameMOC = "Highlights for " + name + ".md";
-				if (this.settings.createNewFile) {
-					// Add link back to Original
-					highlightsText += `## Source\n- [[${name}]]`;
-
-					await this.saveToFile(newBasenameMOC, highlightsText);
-					await this.app.workspace.openLinkText(newBasenameMOC, newBasenameMOC, true);
-				}
-
-				if(this.settings.createNewFile && this.settings.createLinks && this.settings.explodeIntoNotes) {
-					for(var i = 0; i < baseNames.length; i++) {
-						// console.log("Creating file for " + baseNames[i]);
-						var content = "";
-						// add highlight as quote
-						content += "## Source\n"
-						if(this.settings.createContextualQuotes) {
-							// context quote
-							content += `> ${contexts[i]}[^1]`;
-						} else {
-							// regular highlight quote
-							content += `> ${highlights[i]}[^1]`;
-						}
-						content += "\n\n";
-						content += `[^1]: [[${name}]]`;
-						content += "\n";
-						// console.log(content);
-
-						const newBasename = baseNames[i] + ".md";
-
-						await this.saveToFile(newBasename, content);
-
-						if(this.settings.openExplodedNotes) {
-							await this.app.workspace.openLinkText(newBasename, newBasename, true);
-						}
+			await this.app.fileManager.processFrontMatter(
+				activeView.file,
+				(frontmatter) => {
+					let existing: boolean = false;
+					if (frontmatter['highlights'] != null) {
+						existing = true;
 					}
-				}
+					frontmatter['highlights'] = highlightsText;
+					
+					new Notice(
+						`Highlights ${
+							existing ? "property was updated." : "added as property!"
+						} `,
+						4000
+					);
+				},
+				{}
+				);
+		} catch (e: any) {
+			if (e?.name === "YAMLParseError") {
+				const errorMessage = `Adding property failed. Malformed frontmatter:
 
-			} else {
-				new Notice("No highlights to extract.");
+${e.message}`;
+				new Notice(errorMessage, 4000);
+				console.error(errorMessage);
+				return {
+					status: "error",
+					error: e,
+				};
 			}
-		} catch (e) {
-			console.log(e.message)
 		}
+		return {
+			status: "ok",
+		};
 	}
 
-	async saveToFile(filePath: string, mdString: string) {
-		//If files exists then append content to existing file
-		const fileExists = await this.app.vault.adapter.exists(filePath);
-		if (fileExists) {
-			// console.log("File exists already...");
-		} else {
-			await this.app.vault.create(filePath, mdString);
+	// async extractHighlights() {
+	// 	let activeLeaf: any = this.app.workspace.activeLeaf ?? null;
+
+	// 	let name = activeLeaf?.view.file.basename;
+
+	// 	try {
+	// 		if (activeLeaf?.view?.data) {
+	// 			let processResults = this.processHighlights(activeLeaf.view);
+	// 			let highlightsText = processResults.markdown;
+	// 			let highlights = processResults.highlights;
+	// 			let baseNames = processResults.baseNames;
+	// 			let contexts = processResults.contexts;
+	// 			let saveStatus = this.saveToClipboard(highlightsText);
+	// 			new Notice(saveStatus);
+
+	// 			const newBasenameMOC = "Highlights for " + name + ".md";
+	// 			if (this.settings.createNewFile) {
+	// 				// Add link back to Original
+	// 				highlightsText += `## Source\n- [[${name}]]`;
+
+	// 				await this.saveToFile(newBasenameMOC, highlightsText);
+	// 				await this.app.workspace.openLinkText(
+	// 					newBasenameMOC,
+	// 					newBasenameMOC,
+	// 					true
+	// 				);
+	// 			}
+
+	// 			if (
+	// 				this.settings.createNewFile &&
+	// 				this.settings.createLinks &&
+	// 				this.settings.explodeIntoNotes
+	// 			) {
+	// 				for (var i = 0; i < baseNames.length; i++) {
+	// 					// console.log("Creating file for " + baseNames[i]);
+	// 					var content = "";
+	// 					// add highlight as quote
+	// 					content += "## Source\n";
+	// 					if (this.settings.createContextualQuotes) {
+	// 						// context quote
+	// 						content += `> ${contexts[i]}[^1]`;
+	// 					} else {
+	// 						// regular highlight quote
+	// 						content += `> ${highlights[i]}[^1]`;
+	// 					}
+	// 					content += "\n\n";
+	// 					content += `[^1]: [[${name}]]`;
+	// 					content += "\n";
+	// 					// console.log(content);
+
+	// 					const newBasename = baseNames[i] + ".md";
+
+	// 					await this.saveToFile(newBasename, content);
+
+	// 					if (this.settings.openExplodedNotes) {
+	// 						await this.app.workspace.openLinkText(
+	// 							newBasename,
+	// 							newBasename,
+	// 							true
+	// 						);
+	// 					}
+	// 				}
+	// 			}
+	// 		} else {
+	// 			new Notice("No highlights to extract.");
+	// 		}
+	// 	} catch (e) {
+	// 		console.log(e.message);
+	// 	}
+	// }
+
+	processHighlights(view: TextFileView) {
+		const patterns: string[] = ["==(.*?)=="];
+		const custom_patterns: string[] =
+			this.settings.customHighlightRegex.split("\n");
+		custom_patterns.forEach((v) => {
+			if (v.length > 0) {
+				try {
+					new RegExp(v);
+				} catch (e) {
+					console.error("Invalid regular expression:", v);
+				}
+				patterns.push("(" + v + ")");
+			}
+		});
+		if (this.settings.useBoldForHighlights) {
+			// eslint-disable-next-line no-useless-escape
+			patterns.push("\\*\\*(.*?)\\*\\*");
 		}
-	}
-
-	processHighlights(view: any) {
-
-		var re;
-
-		if(this.settings.useBoldForHighlights) {
-			re = /(==|\<mark\>|\*\*)([\s\S]*?)(==|\<\/mark\>|\*\*)/g;
-		} else {
-			re = /(==|\<mark\>)([\s\S]*?)(==|\<\/mark\>)/g;
+		if (this.settings.useHighlightr) {
+			patterns.push("<mark[^>]*?>(.*?)<\\/mark>");
 		}
 
-		let markdownText = view.data;
-		let basename = view.file.basename;
-		let matches = markdownText.match(re);
-		this.counter += 1;
+		// eslint-disable-next-line no-useless-escape
+		const regexStr = patterns.join("|");
+		const re = new RegExp(regexStr, "g");
 
-		var result = "";
-		var highlights = [];
-		var baseNames = [];
-		let contexts: any[][] = [];
-		let lines = markdownText.split("\n");
-		let cleanedLines = [];
+		const markdownText = view.data;
+		// const matches = markdownText.match(re);
 
-		for(var i = 0; i < lines.length; i++) {
-			if(!(lines[i] == "")) {
+		let result = "";
+		const contexts: string[] = [];
+		const lines = markdownText.split("\n");
+		const cleanedLines: string[] = [];
+
+		for (let i = 0; i < lines.length; i++) {
+			if (!(lines[i] == "")) {
 				cleanedLines.push(lines[i]);
 			}
 		}
 
-		if (matches != null) {
-			if(this.settings.headlineText != "") { 
-				let text = this.settings.headlineText.replace(/\$NOTE_TITLE/, `${basename}`)
-				result += `## ${text}\n`;
-			}
+		let match;
+		while ((match = re.exec(markdownText)) !== null) {
+			const full = match[0];
+			match.reverse().map((entry) => {
+				if (entry && entry !== full) {
+					// Keep surrounding paragraph for context
+					if (this.settings.createContextualQuotes) {
+						for (let i = 0; i < cleanedLines.length; i++) {
+							const matched_line = cleanedLines[i].match(entry);
+							if (
+								!(matched_line == null) &&
+								matched_line.length > 0
+							) {
+								const val = cleanedLines[i];
 
-			for (let entry of matches) {
-				// Keep surrounding paragraph for context
-				if(this.settings.createContextualQuotes) {
-					for(var i = 0; i < cleanedLines.length; i++) {
-						let match = cleanedLines[i].match(entry);
-						if(!(match == null) && match.length > 0) {
-							let val = cleanedLines[i];
-
-							if(!contexts.contains(val)) {
-								contexts.push(val);
+								if (!contexts.contains(val)) {
+									contexts.push(val);
+								}
 							}
 						}
 					}
-				}
 
-				// Clean up highlighting match
-				var removeNewline = entry.replace(/\n/g, " ");
-				let removeHighlightStart = removeNewline.replace(/==/g, "")
-				let removeHighlightEnd = removeHighlightStart.replace(/\<mark\>/g, "")
-				let removeMarkClosing = removeHighlightEnd.replace(/\<\/mark\>/g, "")
-				let removeBold = removeMarkClosing.replace(/\*\*/g, "")
-				let removeDoubleSpaces = removeBold.replace("  ", " ");
+					let trim = entry.trim();
 
-				removeDoubleSpaces = removeDoubleSpaces.replace("  ", " ");
-				removeDoubleSpaces = removeDoubleSpaces.trim();
-
-				if(this.settings.autoCapitalize) {
-					if(removeDoubleSpaces != null) {
-						removeDoubleSpaces = this.capitalizeFirstLetter(removeDoubleSpaces);
-					}
-				}
-
-				result += "- "
-
-				if(this.settings.createLinks) {
-					// First, sanitize highlight to be used as a file-link
-					// * " \ / | < > : ?
-					let sanitized = removeDoubleSpaces.replace(/\*|\"|\\|\/|\<|\>|\:|\?|\|/gm, "");
-					sanitized = sanitized.trim();
-
-					let baseName = sanitized;
-					if(baseName.length > 100) {
-						baseName = baseName.substr(0, 99);
-						baseName += "..."
+					if (this.settings.autoCapitalize) {
+						if (trim != null) {
+							trim = this.capitalizeFirstLetter(trim);
+						}
 					}
 
-					result += "[[" + baseName + "]]";
-					highlights.push(sanitized);
-					baseNames.push(baseName);
-				} else {
-					result += removeDoubleSpaces;
-					highlights.push(removeDoubleSpaces);
+					result += "- " + trim + "\n";
+					return false;
 				}
-
-				if(this.settings.addFootnotes) {
-					result += `[^${this.counter}]`;
-				} 
-
-				result += "\n";
-			}
-
-			if(this.settings.addFootnotes) {
-				result += "\n"
-				result += `[^${this.counter}]: [[${basename}]]\n`
-			}
-
-			result += "\n";
+			});
 		}
+		result += "\n";
 
-		return {markdown: result, baseNames: baseNames, highlights: highlights, contexts: contexts};
+		return { markdown: result, contexts: contexts };
 	}
 
 	saveToClipboard(data: string): string {
@@ -256,27 +268,6 @@ export default class ExtractHighlightsPlugin extends Plugin {
 			return "No highlights found";
 		}
 	}
-
-	createHighlight() {
-		const mdView = this.app.workspace.activeLeaf.view as MarkdownView;
-		const doc = mdView.sourceMode.cmEditor;
-		this.editor = doc;
-
-		const cursorPosition = this.editor.getCursor();
-		let lineText = this.editor.getLine(cursorPosition.line);
-
-		// use our fancy class to figure this out
-		let th = new ToggleHighlight();
-		let result = th.toggleHighlight(lineText, cursorPosition.ch);
-
-		// catch up on cursor
-		let cursorDifference = -2;
-		if(result.length > lineText.length) { cursorDifference = 2 }
-
-		this.editor.replaceRange(result, {line: cursorPosition.line, ch: 0}, {line: cursorPosition.line, ch: lineText.length})
-		this.editor.setCursor({line: cursorPosition.line, ch: cursorPosition.ch + cursorDifference});
-	}
-
 
 	capitalizeFirstLetter(s: string) {
 		return s.charAt(0).toUpperCase() + s.slice(1);
