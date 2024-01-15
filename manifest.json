@@ -1,7 +1,7 @@
 {
 	"id": "highlights-to-property",
 	"name": "Extract Highlights to Property",
-	"version": "0.0.1",
+	"version": ".1.0",
 	"description": "Create a property from the markdown and html highlights of a note.",
 	"author": "Stephan Zwicknagl",
 	"authorUrl": "https://github.com/stephanzwicknagl/",
